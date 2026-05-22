@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, "claude/**" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    name: PHP ${{ matrix.php }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-24.04, macos-latest ]
+        php: [ "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5" ]
+        include:
+          # All macOS jobs need an explicit GCC (Glaze requires C++23 / GCC ≥ 13;
+          # the default 'g++' on macOS is actually Clang and may lack C++23 support)
+          - os: macos-latest
+            gcc_version: "14"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Platform-specific toolchain
+      # -----------------------------------------------------------------------
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build build-essential
+
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja gcc@${{ matrix.gcc_version }}
+          echo "CC=gcc-${{ matrix.gcc_version }}"   >> "$GITHUB_ENV"
+          echo "CXX=g++-${{ matrix.gcc_version }}" >> "$GITHUB_ENV"
+
+      # -----------------------------------------------------------------------
+      # PHP  (shivammathur/setup-php installs dev headers via ondrej/php PPA)
+      # -----------------------------------------------------------------------
+      - name: Setup PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: phpize
+
+      - name: Show PHP version
+        run: php -n -r "echo PHP_VERSION, PHP_EOL;"
+
+      # -----------------------------------------------------------------------
+      # Build
+      # -----------------------------------------------------------------------
+      - name: Cache Glaze source
+        uses: actions/cache@v4
+        with:
+          path: build/_deps/glaze-src
+          key: glaze-v7.7.0-${{ runner.os }}
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Verify extension loads
+        run: php -n -d "extension=build/glaze.so" -r "echo extension_loaded('glaze') ? 'ok' : 'fail';"
+
+      # -----------------------------------------------------------------------
+      # Tests
+      # -----------------------------------------------------------------------
+      - name: Run tests
+        run: bash run_tests.sh build/glaze.so
+
+      # -----------------------------------------------------------------------
+      # Install smoke-test (Linux only)
+      # -----------------------------------------------------------------------
+      - name: Install to extension dir
+        if: runner.os == 'Linux'
+        run: sudo cmake --install build
+
+      - name: Smoke-test installed extension
+        if: runner.os == 'Linux'
+        run: |
+          php -d "extension=glaze.so" -r "
+            \$json = glaze_encode(['hello' => 'world']);
+            \$data = glaze_decode(\$json);
+            echo \$data['hello'] === 'world' ? 'ok' : 'fail';
+          "
