@@ -5,7 +5,8 @@ description: >
 
 theme: just-the-docs
 
-url: https://fduarte42.github.io/php-glaze
+url: https://fduarte42.github.io
+baseurl: /php-glaze
 
 color_scheme: dark
 
