@@ -9,8 +9,8 @@ $data = [
 $json = glaze_encode($data);
 assert(is_string($json), 'encode should return string');
 
-// Round-trip through PHP's own decoder to verify structure
-$decoded = json_decode($json, true);
+// Round-trip through glaze_decode to verify structure
+$decoded = glaze_decode($json);
 assert($decoded['name']  === 'Alice');
 assert($decoded['age']   === 30);
 assert($decoded['tags']  === ['php', 'c++']);

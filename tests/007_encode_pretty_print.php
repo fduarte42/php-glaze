@@ -13,7 +13,7 @@ assert(strpos($pretty, '   ') !== false || strpos($pretty, "\t") !== false,
     'pretty should be indented');
 
 // Both decode to the same value
-assert(json_decode($compact, true) === json_decode($pretty, true),
+assert(glaze_decode($compact) === glaze_decode($pretty),
     'compact and pretty should decode identically');
 
 echo "PASS\n";
