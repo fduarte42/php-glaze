@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.0.0)'
+        required: true
+        type: string
   push:
     tags:
       - 'v*'
@@ -94,7 +100,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "Release ${{ github.ref_name }}" \
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="v${{ inputs.version }}"
+            TARGET_FLAG="--target ${{ github.sha }}"
+          else
+            TAG="${{ github.ref_name }}"
+            TARGET_FLAG=""
+          fi
+          gh release create "$TAG" \
+            --title "Release $TAG" \
             --generate-notes \
+            $TARGET_FLAG \
             artifacts/*.so
