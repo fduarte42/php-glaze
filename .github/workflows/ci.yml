@@ -13,13 +13,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Test every supported PHP version on Linux
-        os: [ ubuntu-24.04 ]
+        os: [ ubuntu-24.04, macos-latest ]
         php: [ "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5" ]
         include:
-          # macOS smoke-test with a recent GCC (Glaze requires C++23 / GCC ≥ 13)
+          # All macOS jobs need an explicit GCC (Glaze requires C++23 / GCC ≥ 13;
+          # the default 'g++' on macOS is actually Clang and may lack C++23 support)
           - os: macos-latest
-            php: "8.4"
             gcc_version: "14"
 
     steps:
