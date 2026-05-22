@@ -57,6 +57,13 @@ target_include_directories(php_glaze PRIVATE
 
 target_link_libraries(php_glaze PRIVATE glaze::glaze)
 
+# On macOS the linker rejects undefined symbols by default.  PHP extension
+# symbols (emalloc, zend_new_array, …) are supplied by the PHP runtime at
+# load time, so we must tell ld to allow them.
+if(APPLE)
+    target_link_options(php_glaze PRIVATE -undefined dynamic_lookup)
+endif()
+
 target_compile_definitions(php_glaze PRIVATE
     COMPILE_DL_GLAZE=1
     ZEND_ENABLE_STATIC_TSRMLS_CACHE=1
