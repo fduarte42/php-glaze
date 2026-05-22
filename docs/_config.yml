@@ -1,0 +1,27 @@
+title: php-glaze
+description: >
+  High-performance PHP serialization extension wrapping the Glaze C++ library.
+  Supports JSON, BEVE, CBOR, MessagePack, TOML, and YAML with ~1.4 GB/s throughput.
+
+theme: just-the-docs
+
+url: https://fduarte42.github.io/php-glaze
+
+color_scheme: dark
+
+aux_links:
+  "GitHub":
+    - "https://github.com/fduarte42/php-glaze"
+
+aux_links_new_tab: true
+
+nav_sort: case_insensitive
+
+footer_content: >
+  MIT License &copy; 2026 Tito Duarte &mdash;
+  Powered by <a href="https://github.com/stephenberry/glaze">Glaze</a>.
+
+# Exclude from Jekyll build
+exclude:
+  - Gemfile
+  - Gemfile.lock
