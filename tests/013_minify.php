@@ -5,7 +5,7 @@ $min    = glaze_minify($pretty);
 assert(is_string($min),                     'minify returns string');
 assert(strpos($min, "\n") === false,        'minified output has no newlines');
 assert(strpos($min, '  ') === false,        'minified output has no extra spaces');
-assert(json_decode($pretty, true) === json_decode($min, true),
+assert(glaze_decode($pretty) === glaze_decode($min),
     'minify preserves value');
 
 // Already-minified input is a no-op

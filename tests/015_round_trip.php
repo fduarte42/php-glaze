@@ -1,5 +1,5 @@
 <?php
-function round_trip(mixed $value): mixed {
+function round_trip($value) {
     return glaze_decode(glaze_encode($value));
 }
 

@@ -3,7 +3,11 @@ project(php_glaze VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# Extensions ON gives -std=gnu++23 instead of -std=c++23.  PHP 7.4 headers
+# (and macOS PHP headers from Homebrew) use the GCC/Clang typeof() extension
+# in their internal macros; strict ISO mode rejects it.  gnu++23 is a strict
+# superset of c++23 so all Glaze C++23 features remain fully available.
+set(CMAKE_CXX_EXTENSIONS ON)
 
 # ---------------------------------------------------------------------------
 # Fetch Glaze
@@ -52,6 +56,13 @@ target_include_directories(php_glaze PRIVATE
 )
 
 target_link_libraries(php_glaze PRIVATE glaze::glaze)
+
+# On macOS the linker rejects undefined symbols by default.  PHP extension
+# symbols (emalloc, zend_new_array, …) are supplied by the PHP runtime at
+# load time, so we must tell ld to allow them.
+if(APPLE)
+    target_link_options(php_glaze PRIVATE -undefined dynamic_lookup)
+endif()
 
 target_compile_definitions(php_glaze PRIVATE
     COMPILE_DL_GLAZE=1

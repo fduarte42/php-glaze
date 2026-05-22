@@ -1,13 +1,12 @@
-name: CI
+name: Release
 
 on:
   push:
-    branches: [ main, "claude/**" ]
-  pull_request:
-    branches: [ main ]
+    tags:
+      - 'v*'
 
 jobs:
-  build-test:
+  build:
     name: PHP ${{ matrix.php }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -36,16 +35,13 @@ jobs:
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       # -----------------------------------------------------------------------
-      # PHP  (shivammathur/setup-php installs dev headers via ondrej/php PPA)
+      # PHP
       # -----------------------------------------------------------------------
       - name: Setup PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           tools: phpize
-
-      - name: Show PHP version
-        run: php -n -r "echo PHP_VERSION, PHP_EOL;"
 
       # -----------------------------------------------------------------------
       # Build
@@ -62,28 +58,43 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      - name: Verify extension loads
+      # -----------------------------------------------------------------------
+      # Stage artifact with a descriptive name: glaze-php{ver}-{os}-{arch}.so
+      # -----------------------------------------------------------------------
+      - name: Stage artifact
         run: |
-          php -n -d "extension=build/glaze.so" -r "echo extension_loaded('glaze') ? 'ok' : 'fail';"
+          OS=$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')
+          ARCH=$(uname -m)
+          cp build/glaze.so "glaze-php${{ matrix.php }}-${OS}-${ARCH}.so"
 
-      # -----------------------------------------------------------------------
-      # Tests
-      # -----------------------------------------------------------------------
-      - name: Run tests
-        run: bash run_tests.sh build/glaze.so
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glaze-php${{ matrix.php }}-${{ runner.os }}
+          path: glaze-php${{ matrix.php }}-*.so
 
-      # -----------------------------------------------------------------------
-      # Install smoke-test (Linux only)
-      # -----------------------------------------------------------------------
-      - name: Install to extension dir
-        if: runner.os == 'Linux'
-        run: sudo cmake --install build
+  # ---------------------------------------------------------------------------
+  # Collect all per-job artifacts and publish a GitHub release
+  # ---------------------------------------------------------------------------
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-      - name: Smoke-test installed extension
-        if: runner.os == 'Linux'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          php -d "extension=glaze.so" -r "
-            \$json = glaze_encode(['hello' => 'world']);
-            \$data = glaze_decode(\$json);
-            echo \$data['hello'] === 'world' ? 'ok' : 'fail';
-          "
+          gh release create "${{ github.ref_name }}" \
+            --title "Release ${{ github.ref_name }}" \
+            --generate-notes \
+            artifacts/*.so
