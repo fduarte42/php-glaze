@@ -1,5 +1,8 @@
-// PHP extension wrapping the Glaze JSON library (https://github.com/stephenberry/glaze)
-// Exposed functions: glaze_encode, glaze_decode, glaze_prettify, glaze_minify, glaze_validate
+// PHP extension wrapping the Glaze library (https://github.com/stephenberry/glaze)
+// Exposed functions: glaze_encode, glaze_decode, glaze_prettify, glaze_minify,
+//   glaze_validate, glaze_beve_encode, glaze_beve_decode, glaze_cbor_encode,
+//   glaze_cbor_decode, glaze_msgpack_encode, glaze_toml_encode, glaze_toml_decode,
+//   glaze_yaml_encode, glaze_yaml_decode
 // Supports PHP 7.4 through 8.x.
 
 #ifdef HAVE_CONFIG_H
@@ -12,6 +15,11 @@ extern "C" {
 }
 
 #include "glaze/json.hpp"
+#include "glaze/beve.hpp"
+#include "glaze/cbor.hpp"
+#include "glaze/msgpack.hpp"
+#include "glaze/toml.hpp"
+#include "glaze/yaml.hpp"
 
 #include <charconv>
 #include <cmath>
@@ -21,7 +29,7 @@ extern "C" {
 #include <type_traits>
 #include <variant>
 
-#define PHP_GLAZE_VERSION  "1.0.0"
+#define PHP_GLAZE_VERSION  "1.1.0"
 #define PHP_GLAZE_EXTNAME  "glaze"
 #define GLAZE_LIB_VERSION  "7.7.0"
 #define GLAZE_FLAG_PRETTY_PRINT 1
@@ -58,6 +66,17 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_glaze_validate, 0, 1, _IS_BOOL, 
     ZEND_ARG_TYPE_INFO(0, json, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
+// Shared arginfo for format-specific encode: (mixed $value): string|false
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_glaze_format_encode, 0, 1, MAY_BE_STRING|MAY_BE_FALSE)
+    ZEND_ARG_INFO(0, value)
+ZEND_END_ARG_INFO()
+
+// Shared arginfo for format-specific decode: (string $data, bool $assoc = true): mixed
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_glaze_format_decode, 0, 1, MAY_BE_ANY)
+    ZEND_ARG_TYPE_INFO(0, data, IS_STRING, 0)
+    ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, assoc, _IS_BOOL, 0, "true")
+ZEND_END_ARG_INFO()
+
 #else  // PHP 7.x — typed-arginfo macros not available
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_encode, 0, 0, 1)
@@ -80,6 +99,15 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_validate, 0, 0, 1)
     ZEND_ARG_INFO(0, json)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_format_encode, 0, 0, 1)
+    ZEND_ARG_INFO(0, value)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_format_decode, 0, 0, 1)
+    ZEND_ARG_INFO(0, data)
+    ZEND_ARG_INFO(0, assoc)
 ZEND_END_ARG_INFO()
 
 #endif  // PHP_VERSION_ID
@@ -117,7 +145,6 @@ static inline bool glaze_is_list(zend_array *ht) {
 // handler (which takes zval* in 7.x vs zend_object* in 8.x).
 // ============================================================================
 
-// RAII wrapper so we don't duplicate the release path
 struct PropsGuard {
     HashTable *ht;
     bool       needs_release;
@@ -181,7 +208,7 @@ static void escape_json_string(std::string &out, const char *str, size_t len)
 
 static void build_json(zval *val, std::string &out, int depth)
 {
-    if (depth > 512) {          // guard against deeply-nested / recursive inputs
+    if (depth > 512) {
         out += "null";
         return;
     }
@@ -209,10 +236,9 @@ static void build_json(zval *val, std::string &out, int depth)
         case IS_DOUBLE: {
             double d = Z_DVAL_P(val);
             if (!std::isfinite(d)) {
-                out += "null";              // JSON has no NaN/Inf
+                out += "null";
                 return;
             }
-            // std::to_chars gives the shortest round-trip representation
             char buf[32];
             auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), d);
             if (ec == std::errc{}) {
@@ -300,9 +326,6 @@ static void build_json(zval *val, std::string &out, int depth)
 
 // ============================================================================
 // Decode path: glz::generic → PHP value
-//
-// glz::read_json correctly populates glz::generic; we then walk the variant
-// tree and build PHP zvals.
 // ============================================================================
 
 static void generic_to_zval(const glz::generic &j, zval *result, bool assoc)
@@ -363,6 +386,19 @@ static void generic_to_zval(const glz::generic &j, zval *result, bool assoc)
 }
 
 // ============================================================================
+// php_to_generic: PHP value → glz::generic (via JSON round-trip)
+//
+// Used as the encode bridge for all non-JSON binary/text formats.
+// ============================================================================
+
+static bool php_to_generic(zval *value, glz::generic &g)
+{
+    std::string json_buf;
+    build_json(value, json_buf, 0);
+    return !glz::read_json(g, json_buf);
+}
+
+// ============================================================================
 // glaze_encode(mixed $value, int $flags = 0): string|false
 // ============================================================================
 
@@ -394,8 +430,6 @@ PHP_FUNCTION(glaze_encode)
 PHP_FUNCTION(glaze_decode)
 {
     zend_string *json_str;
-    // Use zend_bool: on PHP 7.x it is unsigned char (and Z_PARAM_BOOL passes
-    // &dest, requiring the exact type); on PHP 8.x it aliases bool.
     zend_bool    assoc = 1;
 
     ZEND_PARSE_PARAMETERS_START(1, 2)
@@ -506,15 +540,224 @@ PHP_FUNCTION(glaze_validate)
 }
 
 // ============================================================================
+// BEVE — Glaze's own compact binary format
+// glaze_beve_encode(mixed $value): string|false
+// glaze_beve_decode(string $data, bool $assoc = true): mixed
+// ============================================================================
+
+PHP_FUNCTION(glaze_beve_encode)
+{
+    zval *value;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(value)
+    ZEND_PARSE_PARAMETERS_END();
+
+    glz::generic g{};
+    if (!php_to_generic(value, g)) { RETURN_FALSE; }
+
+    std::string buf;
+    auto ec = glz::write_beve(g, buf);
+    if (ec) { RETURN_FALSE; }
+    RETURN_STRINGL(buf.c_str(), buf.size());
+}
+
+PHP_FUNCTION(glaze_beve_decode)
+{
+    zend_string *data;
+    zend_bool    assoc = 1;
+
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+        Z_PARAM_STR(data)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_BOOL(assoc)
+    ZEND_PARSE_PARAMETERS_END();
+
+    std::string buf(ZSTR_VAL(data), ZSTR_LEN(data));
+    glz::generic g{};
+    auto ec = glz::read_beve(g, buf);
+    if (ec) {
+        php_error_docref(nullptr, E_WARNING, "glaze_beve_decode: parse error");
+        RETURN_NULL();
+    }
+    generic_to_zval(g, return_value, static_cast<bool>(assoc));
+}
+
+// ============================================================================
+// CBOR — Concise Binary Object Representation (RFC 7049)
+// glaze_cbor_encode(mixed $value): string|false
+// glaze_cbor_decode(string $data, bool $assoc = true): mixed
+// ============================================================================
+
+PHP_FUNCTION(glaze_cbor_encode)
+{
+    zval *value;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(value)
+    ZEND_PARSE_PARAMETERS_END();
+
+    glz::generic g{};
+    if (!php_to_generic(value, g)) { RETURN_FALSE; }
+
+    std::string buf;
+    auto ec = glz::write_cbor(g, buf);
+    if (ec) { RETURN_FALSE; }
+    RETURN_STRINGL(buf.c_str(), buf.size());
+}
+
+PHP_FUNCTION(glaze_cbor_decode)
+{
+    zend_string *data;
+    zend_bool    assoc = 1;
+
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+        Z_PARAM_STR(data)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_BOOL(assoc)
+    ZEND_PARSE_PARAMETERS_END();
+
+    std::string buf(ZSTR_VAL(data), ZSTR_LEN(data));
+    glz::generic g{};
+    auto ec = glz::read_cbor(g, buf);
+    if (ec) {
+        php_error_docref(nullptr, E_WARNING, "glaze_cbor_decode: parse error");
+        RETURN_NULL();
+    }
+    generic_to_zval(g, return_value, static_cast<bool>(assoc));
+}
+
+// ============================================================================
+// MessagePack — encode only
+// Glaze v7.7.0 does not support read_msgpack into glz::generic.
+// glaze_msgpack_encode(mixed $value): string|false
+// ============================================================================
+
+PHP_FUNCTION(glaze_msgpack_encode)
+{
+    zval *value;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(value)
+    ZEND_PARSE_PARAMETERS_END();
+
+    glz::generic g{};
+    if (!php_to_generic(value, g)) { RETURN_FALSE; }
+
+    std::string buf;
+    auto ec = glz::write_msgpack(g, buf);
+    if (ec) { RETURN_FALSE; }
+    RETURN_STRINGL(buf.c_str(), buf.size());
+}
+
+// ============================================================================
+// TOML — Tom's Obvious, Minimal Language
+// glaze_toml_encode(mixed $value): string|false
+// glaze_toml_decode(string $data, bool $assoc = true): mixed
+// ============================================================================
+
+PHP_FUNCTION(glaze_toml_encode)
+{
+    zval *value;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(value)
+    ZEND_PARSE_PARAMETERS_END();
+
+    glz::generic g{};
+    if (!php_to_generic(value, g)) { RETURN_FALSE; }
+
+    std::string buf;
+    auto ec = glz::write_toml(g, buf);
+    if (ec) { RETURN_FALSE; }
+    RETURN_STRINGL(buf.c_str(), buf.size());
+}
+
+PHP_FUNCTION(glaze_toml_decode)
+{
+    zend_string *data;
+    zend_bool    assoc = 1;
+
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+        Z_PARAM_STR(data)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_BOOL(assoc)
+    ZEND_PARSE_PARAMETERS_END();
+
+    std::string buf(ZSTR_VAL(data), ZSTR_LEN(data));
+    glz::generic g{};
+    auto ec = glz::read_toml(g, buf);
+    if (ec) {
+        php_error_docref(nullptr, E_WARNING, "glaze_toml_decode: parse error");
+        RETURN_NULL();
+    }
+    generic_to_zval(g, return_value, static_cast<bool>(assoc));
+}
+
+// ============================================================================
+// YAML — YAML Ain't Markup Language
+// glaze_yaml_encode(mixed $value): string|false
+// glaze_yaml_decode(string $data, bool $assoc = true): mixed
+// ============================================================================
+
+PHP_FUNCTION(glaze_yaml_encode)
+{
+    zval *value;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_ZVAL(value)
+    ZEND_PARSE_PARAMETERS_END();
+
+    glz::generic g{};
+    if (!php_to_generic(value, g)) { RETURN_FALSE; }
+
+    std::string buf;
+    auto ec = glz::write_yaml(g, buf);
+    if (ec) { RETURN_FALSE; }
+    RETURN_STRINGL(buf.c_str(), buf.size());
+}
+
+PHP_FUNCTION(glaze_yaml_decode)
+{
+    zend_string *data;
+    zend_bool    assoc = 1;
+
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+        Z_PARAM_STR(data)
+        Z_PARAM_OPTIONAL
+        Z_PARAM_BOOL(assoc)
+    ZEND_PARSE_PARAMETERS_END();
+
+    std::string buf(ZSTR_VAL(data), ZSTR_LEN(data));
+    glz::generic g{};
+    auto ec = glz::read_yaml(g, buf);
+    if (ec) {
+        php_error_docref(nullptr, E_WARNING, "glaze_yaml_decode: parse error");
+        RETURN_NULL();
+    }
+    generic_to_zval(g, return_value, static_cast<bool>(assoc));
+}
+
+// ============================================================================
 // Module boilerplate
 // ============================================================================
 
 static const zend_function_entry glaze_functions[] = {
-    PHP_FE(glaze_encode,   arginfo_glaze_encode)
-    PHP_FE(glaze_decode,   arginfo_glaze_decode)
-    PHP_FE(glaze_prettify, arginfo_glaze_prettify)
-    PHP_FE(glaze_minify,   arginfo_glaze_minify)
-    PHP_FE(glaze_validate, arginfo_glaze_validate)
+    // JSON
+    PHP_FE(glaze_encode,        arginfo_glaze_encode)
+    PHP_FE(glaze_decode,        arginfo_glaze_decode)
+    PHP_FE(glaze_prettify,      arginfo_glaze_prettify)
+    PHP_FE(glaze_minify,        arginfo_glaze_minify)
+    PHP_FE(glaze_validate,      arginfo_glaze_validate)
+    // BEVE
+    PHP_FE(glaze_beve_encode,   arginfo_glaze_format_encode)
+    PHP_FE(glaze_beve_decode,   arginfo_glaze_format_decode)
+    // CBOR
+    PHP_FE(glaze_cbor_encode,   arginfo_glaze_format_encode)
+    PHP_FE(glaze_cbor_decode,   arginfo_glaze_format_decode)
+    // MessagePack (encode only)
+    PHP_FE(glaze_msgpack_encode, arginfo_glaze_format_encode)
+    // TOML
+    PHP_FE(glaze_toml_encode,   arginfo_glaze_format_encode)
+    PHP_FE(glaze_toml_decode,   arginfo_glaze_format_decode)
+    // YAML
+    PHP_FE(glaze_yaml_encode,   arginfo_glaze_format_encode)
+    PHP_FE(glaze_yaml_decode,   arginfo_glaze_format_decode)
     PHP_FE_END
 };
 
@@ -531,6 +774,8 @@ PHP_MINFO_FUNCTION(glaze)
     php_info_print_table_header(2, "glaze support",         "enabled");
     php_info_print_table_row(2,    "extension version",     PHP_GLAZE_VERSION);
     php_info_print_table_row(2,    "glaze library version", GLAZE_LIB_VERSION);
+    php_info_print_table_row(2,    "formats",
+        "JSON, BEVE, CBOR, MessagePack (encode), TOML, YAML");
     php_info_print_table_end();
 }
 

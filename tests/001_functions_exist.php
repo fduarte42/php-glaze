@@ -5,6 +5,15 @@ $functions = [
     'glaze_prettify',
     'glaze_minify',
     'glaze_validate',
+    'glaze_beve_encode',
+    'glaze_beve_decode',
+    'glaze_cbor_encode',
+    'glaze_cbor_decode',
+    'glaze_msgpack_encode',
+    'glaze_toml_encode',
+    'glaze_toml_decode',
+    'glaze_yaml_encode',
+    'glaze_yaml_decode',
 ];
 
 foreach ($functions as $fn) {
