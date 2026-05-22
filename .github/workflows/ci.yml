@@ -15,7 +15,7 @@ jobs:
       matrix:
         # Test every supported PHP version on Linux
         os: [ ubuntu-24.04 ]
-        php: [ "7.4", "8.0", "8.1", "8.2", "8.3", "8.4" ]
+        php: [ "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5" ]
         include:
           # macOS smoke-test with a recent GCC (Glaze requires C++23 / GCC ≥ 13)
           - os: macos-latest
