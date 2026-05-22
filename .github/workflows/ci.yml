@@ -13,10 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Test every supported PHP version on Linux
         os: [ ubuntu-24.04 ]
-        php: [ "8.2", "8.3", "8.4" ]
+        php: [ "7.4", "8.0", "8.1", "8.2", "8.3", "8.4" ]
         include:
-          # macOS with a recent GCC to satisfy Glaze's C++23 requirements
+          # macOS smoke-test with a recent GCC (Glaze requires C++23 / GCC ≥ 13)
           - os: macos-latest
             php: "8.4"
             gcc_version: "14"
@@ -41,13 +42,16 @@ jobs:
           echo "CXX=g++-${{ matrix.gcc_version }}" >> "$GITHUB_ENV"
 
       # -----------------------------------------------------------------------
-      # PHP
+      # PHP  (shivammathur/setup-php installs dev headers via ondrej/php PPA)
       # -----------------------------------------------------------------------
       - name: Setup PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           tools: phpize
+
+      - name: Show PHP version
+        run: php -n -r "echo PHP_VERSION, PHP_EOL;"
 
       # -----------------------------------------------------------------------
       # Build
@@ -74,7 +78,7 @@ jobs:
         run: bash run_tests.sh build/glaze.so
 
       # -----------------------------------------------------------------------
-      # Install smoke-test
+      # Install smoke-test (Linux only)
       # -----------------------------------------------------------------------
       - name: Install to extension dir
         if: runner.os == 'Linux'

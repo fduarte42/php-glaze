@@ -1,5 +1,6 @@
 // PHP extension wrapping the Glaze JSON library (https://github.com/stephenberry/glaze)
 // Exposed functions: glaze_encode, glaze_decode, glaze_prettify, glaze_minify, glaze_validate
+// Supports PHP 7.4 through 8.x.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -26,8 +27,14 @@ extern "C" {
 #define GLAZE_FLAG_PRETTY_PRINT 1
 
 // ============================================================================
-// Argument info (required in PHP 8.x to avoid "Missing arginfo" warnings)
+// Argument info
+//
+// ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX and ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE
+// were introduced in PHP 8.0.  Use the simpler ZEND_BEGIN_ARG_INFO_EX form on
+// older versions so the same source compiles against all supported headers.
 // ============================================================================
+
+#if PHP_VERSION_ID >= 80000
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_glaze_encode, 0, 1, MAY_BE_STRING|MAY_BE_FALSE)
     ZEND_ARG_INFO(0, value)
@@ -51,13 +58,100 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_glaze_validate, 0, 1, _IS_BOOL, 
     ZEND_ARG_TYPE_INFO(0, json, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
+#else  // PHP 7.x — typed-arginfo macros not available
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_encode, 0, 0, 1)
+    ZEND_ARG_INFO(0, value)
+    ZEND_ARG_INFO(0, flags)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_decode, 0, 0, 1)
+    ZEND_ARG_INFO(0, json)
+    ZEND_ARG_INFO(0, assoc)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_prettify, 0, 0, 1)
+    ZEND_ARG_INFO(0, json)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_minify, 0, 0, 1)
+    ZEND_ARG_INFO(0, json)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_glaze_validate, 0, 0, 1)
+    ZEND_ARG_INFO(0, json)
+ZEND_END_ARG_INFO()
+
+#endif  // PHP_VERSION_ID
+
+// ============================================================================
+// zend_array_is_list polyfill
+//
+// Added in PHP 8.1.  On earlier versions we replicate the logic: an array is
+// a list iff it has consecutive integer keys 0, 1, 2, … n-1.
+// ============================================================================
+
+#if PHP_VERSION_ID < 80100
+static bool glaze_is_list(zend_array *ht)
+{
+    if (zend_hash_num_elements(ht) == 0) return true;
+    zend_ulong expected = 0;
+    zend_string *key;
+    zend_ulong   num_key;
+    ZEND_HASH_FOREACH_KEY(ht, num_key, key) {
+        if (key != nullptr || num_key != expected++) return false;
+    } ZEND_HASH_FOREACH_END();
+    return true;
+}
+#else
+static inline bool glaze_is_list(zend_array *ht) {
+    return zend_array_is_list(ht) != 0;
+}
+#endif
+
+// ============================================================================
+// Object property access helpers
+//
+// PHP 8.0 introduced zend_get_properties_for() / zend_release_properties() and
+// ZEND_PROP_PURPOSE_JSON.  On PHP 7.x we fall back to the get_properties
+// handler (which takes zval* in 7.x vs zend_object* in 8.x).
+// ============================================================================
+
+// RAII wrapper so we don't duplicate the release path
+struct PropsGuard {
+    HashTable *ht;
+    bool       needs_release;
+
+    ~PropsGuard() {
+#if PHP_VERSION_ID >= 80000
+        if (needs_release && ht) zend_release_properties(ht);
+#else
+        (void)needs_release;
+#endif
+    }
+};
+
+static PropsGuard get_object_props(zval *val)
+{
+#if PHP_VERSION_ID >= 80000
+    HashTable *ht = zend_get_properties_for(val, ZEND_PROP_PURPOSE_JSON);
+    return {ht, true};
+#else
+    auto *handlers = Z_OBJ_P(val)->handlers;
+    HashTable *ht = (handlers && handlers->get_properties)
+        ? handlers->get_properties(val)
+        : nullptr;
+    return {ht, false};
+#endif
+}
+
 // ============================================================================
 // Encode path: PHP value → JSON string (direct builder)
 //
-// glz::generic construction from PHP values produces wrong output because
+// glz::generic construction from user code produces wrong output because
 // Glaze serializes generic_json using its own tagged representation — the
-// internal state must be set through glz::read_json, not user construction.
-// A direct string builder avoids that coupling entirely.
+// variant's internal state must be populated by glz::read_json, not by
+// direct user construction.  A direct string builder sidesteps this entirely.
 // ============================================================================
 
 static void escape_json_string(std::string &out, const char *str, size_t len)
@@ -118,7 +212,7 @@ static void build_json(zval *val, std::string &out, int depth)
                 out += "null";              // JSON has no NaN/Inf
                 return;
             }
-            // Use shortest round-trip representation (matches PHP serialize_precision=-1)
+            // std::to_chars gives the shortest round-trip representation
             char buf[32];
             auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), d);
             if (ec == std::errc{}) {
@@ -138,7 +232,7 @@ static void build_json(zval *val, std::string &out, int depth)
         case IS_ARRAY: {
             zend_array *ht = Z_ARRVAL_P(val);
 
-            if (zend_array_is_list(ht)) {
+            if (glaze_is_list(ht)) {
                 out += '[';
                 bool first = true;
                 zval *entry;
@@ -174,12 +268,13 @@ static void build_json(zval *val, std::string &out, int depth)
         case IS_OBJECT: {
             out += '{';
             bool first = true;
-            HashTable *props = zend_get_properties_for(val, ZEND_PROP_PURPOSE_JSON);
-            if (props) {
+
+            auto pg = get_object_props(val);
+            if (pg.ht) {
                 zend_string *str_key;
                 zend_ulong   num_key;
                 zval        *entry;
-                ZEND_HASH_FOREACH_KEY_VAL(props, num_key, str_key, entry) {
+                ZEND_HASH_FOREACH_KEY_VAL(pg.ht, num_key, str_key, entry) {
                     if (Z_TYPE_P(entry) == IS_UNDEF) continue;
                     if (!first) out += ',';
                     first = false;
@@ -192,8 +287,8 @@ static void build_json(zval *val, std::string &out, int depth)
                     out += "\":";
                     build_json(entry, out, depth + 1);
                 } ZEND_HASH_FOREACH_END();
-                zend_release_properties(props);
             }
+
             out += '}';
             return;
         }
@@ -299,7 +394,9 @@ PHP_FUNCTION(glaze_encode)
 PHP_FUNCTION(glaze_decode)
 {
     zend_string *json_str;
-    bool         assoc = true;
+    // Use zend_bool: on PHP 7.x it is unsigned char (and Z_PARAM_BOOL passes
+    // &dest, requiring the exact type); on PHP 8.x it aliases bool.
+    zend_bool    assoc = 1;
 
     ZEND_PARSE_PARAMETERS_START(1, 2)
         Z_PARAM_STR(json_str)
@@ -317,7 +414,7 @@ PHP_FUNCTION(glaze_decode)
                 glz::format_error(ec, input).c_str());
             RETURN_NULL();
         }
-        generic_to_zval(parsed, return_value, assoc);
+        generic_to_zval(parsed, return_value, static_cast<bool>(assoc));
     } catch (const std::exception &e) {
         php_error_docref(nullptr, E_WARNING, "glaze_decode: %s", e.what());
         RETURN_NULL();

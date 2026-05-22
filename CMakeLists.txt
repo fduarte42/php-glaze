@@ -63,6 +63,7 @@ target_compile_options(php_glaze PRIVATE
     $<$<CXX_COMPILER_ID:GNU>:-Wno-literal-suffix>
     -Wno-deprecated-declarations
     -Wno-unused-parameter   # PHP macros introduce unused params
+    -Wno-register           # PHP 7.x headers use deprecated 'register' keyword
 )
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,12 @@ if [ ! -f "$EXT" ]; then
 fi
 
 for test_file in tests/*.php; do
-    output=$(php -n -d "extension=$EXT" "$test_file" 2>&1) || true
+    # assert.exception=1 makes PHP 7.x throw AssertionError like PHP 8.x does natively
+    output=$(php -n \
+        -d "extension=$EXT" \
+        -d "assert.active=1" \
+        -d "assert.exception=1" \
+        "$test_file" 2>&1) || true
     exit_code=$?
 
     if [ "$output" = "PASS" ]; then
