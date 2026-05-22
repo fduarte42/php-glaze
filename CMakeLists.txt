@@ -3,7 +3,11 @@ project(php_glaze VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# Extensions ON gives -std=gnu++23 instead of -std=c++23.  PHP 7.4 headers
+# (and macOS PHP headers from Homebrew) use the GCC/Clang typeof() extension
+# in their internal macros; strict ISO mode rejects it.  gnu++23 is a strict
+# superset of c++23 so all Glaze C++23 features remain fully available.
+set(CMAKE_CXX_EXTENSIONS ON)
 
 # ---------------------------------------------------------------------------
 # Fetch Glaze

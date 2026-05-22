@@ -15,11 +15,6 @@ jobs:
       matrix:
         os: [ ubuntu-24.04, macos-latest ]
         php: [ "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5" ]
-        include:
-          # All macOS jobs need an explicit GCC (Glaze requires C++23 / GCC ≥ 13;
-          # the default 'g++' on macOS is actually Clang and may lack C++23 support)
-          - os: macos-latest
-            gcc_version: "14"
 
     steps:
       - uses: actions/checkout@v4
@@ -36,9 +31,9 @@ jobs:
       - name: Install build tools (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install cmake ninja gcc@${{ matrix.gcc_version }}
-          echo "CC=gcc-${{ matrix.gcc_version }}"   >> "$GITHUB_ENV"
-          echo "CXX=g++-${{ matrix.gcc_version }}" >> "$GITHUB_ENV"
+          brew install cmake ninja gcc@14
+          echo "CC=gcc-14"   >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       # -----------------------------------------------------------------------
       # PHP  (shivammathur/setup-php installs dev headers via ondrej/php PPA)
