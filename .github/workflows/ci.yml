@@ -68,7 +68,8 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Verify extension loads
-        run: php -n -d "extension=build/glaze.so" -r "echo extension_loaded('glaze') ? 'ok' : 'fail';"
+        run: |
+          php -n -d "extension=build/glaze.so" -r "echo extension_loaded('glaze') ? 'ok' : 'fail';"
 
       # -----------------------------------------------------------------------
       # Tests
