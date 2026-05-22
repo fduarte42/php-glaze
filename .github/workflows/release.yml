@@ -2,11 +2,6 @@ name: Release
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version (e.g. 1.0.0)'
-        required: true
-        type: string
   push:
     tags:
       - 'v*'
@@ -89,6 +84,14 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version from source
+        id: version
+        run: |
+          VERSION=$(grep -oP '#define PHP_GLAZE_VERSION\s+"\K[^"]+' src/php_glaze.cpp)
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -101,14 +104,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="v${{ inputs.version }}"
             TARGET_FLAG="--target ${{ github.sha }}"
           else
-            TAG="${{ github.ref_name }}"
             TARGET_FLAG=""
           fi
-          gh release create "$TAG" \
-            --title "Release $TAG" \
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "Release ${{ steps.version.outputs.tag }}" \
             --generate-notes \
             $TARGET_FLAG \
             artifacts/*.so
