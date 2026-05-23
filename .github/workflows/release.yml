@@ -71,7 +71,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: glaze-php${{ matrix.php }}-${{ runner.os }}
+          name: glaze-php${{ matrix.php }}-${{ runner.os }}-${{ runner.arch }}
           path: glaze-php${{ matrix.php }}-*.so
 
   # ---------------------------------------------------------------------------
