@@ -14,7 +14,7 @@ A PHP extension written in C++ that wraps the [Glaze](https://github.com/stephen
 | JSON | ✓ | ✓ | Default format |
 | BEVE | ✓ | ✓ | Glaze's own compact binary format |
 | CBOR | ✓ | ✓ | Concise Binary Object Representation (RFC 7049) |
-| MessagePack | ✓ | — | Decode not supported in Glaze v7.7.0 with dynamic types |
+| MessagePack | ✓ | ✓ | Native codec (Glaze's built-in msgpack unsupported for dynamic types) |
 | TOML | ✓ | ✓ | Tom's Obvious, Minimal Language |
 | YAML | ✓ | ✓ | YAML Ain't Markup Language |
 
@@ -37,6 +37,11 @@ $pretty = glaze_encode(['name' => 'Alice'], GLAZE_PRETTY_PRINT);
 $beve = glaze_beve_encode(['key' => 'value', 'n' => 42]);
 $data = glaze_beve_decode($beve);
 echo $data['key']; // value
+
+// MessagePack — encode and decode
+$mp = glaze_msgpack_encode(['x' => 1, 'y' => 2]);
+$point = glaze_msgpack_decode($mp);
+echo $point['x']; // 1
 
 // TOML — configuration format
 $toml = glaze_toml_encode(['host' => 'localhost', 'port' => 8080]);

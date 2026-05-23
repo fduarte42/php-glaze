@@ -9,7 +9,7 @@ A PHP extension written in C++ that wraps the [Glaze](https://github.com/stephen
 | JSON | ✓ | ✓ | Default format |
 | BEVE | ✓ | ✓ | Glaze's own compact binary format |
 | CBOR | ✓ | ✓ | Concise Binary Object Representation (RFC 7049) |
-| MessagePack | ✓ | — | Decode not supported in Glaze v7.7.0 with dynamic types |
+| MessagePack | ✓ | ✓ | Native codec (Glaze's built-in msgpack unsupported for dynamic types) |
 | TOML | ✓ | ✓ | Tom's Obvious, Minimal Language |
 | YAML | ✓ | ✓ | YAML Ain't Markup Language |
 
@@ -44,6 +44,7 @@ A PHP extension written in C++ that wraps the [Glaze](https://github.com/stephen
 | Function | Signature | Description |
 |---|---|---|
 | `glaze_msgpack_encode` | `(mixed $value): string\|false` | Encode to MessagePack binary |
+| `glaze_msgpack_decode` | `(string $data, bool $assoc = true): mixed` | Decode from MessagePack binary |
 
 ### TOML
 
@@ -85,8 +86,10 @@ $cbor = glaze_cbor_encode(['ok' => true]);
 $data = glaze_cbor_decode($cbor);
 var_dump($data['ok']); // bool(true)
 
-// MessagePack — encode only
+// MessagePack — encode and decode
 $mp = glaze_msgpack_encode(['x' => 1, 'y' => 2]);
+$point = glaze_msgpack_decode($mp);
+echo $point['x']; // 1
 
 // TOML — configuration format
 $toml = glaze_toml_encode(['host' => 'localhost', 'port' => 8080]);
