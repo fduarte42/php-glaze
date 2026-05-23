@@ -756,8 +756,8 @@ static bool msgpack_decode_val(const uint8_t *&p, const uint8_t *end,
     if (b == 0xcf) {
         if (!need(8)) return false;
         uint64_t v = read_be(8);
-        if (v <= (uint64_t)ZEND_LONG_MAX) ZVAL_LONG(result, (zend_long)v);
-        else ZVAL_DOUBLE(result, (double)v);
+        if (v <= (uint64_t)ZEND_LONG_MAX) { ZVAL_LONG(result, (zend_long)v); }
+        else { ZVAL_DOUBLE(result, (double)v); }
         return true;
     }
     // int
