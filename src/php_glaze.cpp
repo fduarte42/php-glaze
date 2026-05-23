@@ -29,7 +29,7 @@ extern "C" {
 #include <type_traits>
 #include <variant>
 
-#define PHP_GLAZE_VERSION  "1.0.0"
+#define PHP_GLAZE_VERSION  "1.0.1"
 #define PHP_GLAZE_EXTNAME  "glaze"
 #define GLAZE_LIB_VERSION  "7.7.0"
 #define GLAZE_FLAG_PRETTY_PRINT 1
