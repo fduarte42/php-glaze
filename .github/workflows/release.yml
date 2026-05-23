@@ -31,7 +31,9 @@ jobs:
       - name: Install build tools (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install cmake ninja gcc@14
+          brew list cmake  &>/dev/null || brew install cmake
+          brew list ninja  &>/dev/null || brew install ninja
+          brew list gcc@14 &>/dev/null || brew install gcc@14
           echo "CC=gcc-14"   >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
