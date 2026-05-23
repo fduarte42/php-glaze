@@ -17,11 +17,12 @@ extern "C" {
 #include "glaze/json.hpp"
 #include "glaze/beve.hpp"
 #include "glaze/cbor.hpp"
-#include "glaze/msgpack.hpp"
 #include "glaze/toml.hpp"
 #include "glaze/yaml.hpp"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -575,10 +576,266 @@ PHP_FUNCTION(glaze_cbor_decode)
 }
 
 // ============================================================================
-// MessagePack
-// glaze_msgpack_encode(mixed $value): string|false
-// glaze_msgpack_decode(string $data, bool $assoc = true): mixed
+// MessagePack — native codec
+//
+// glz::write_msgpack / glz::read_msgpack cannot be used with glz::generic:
+// Glaze serialises the variant as a tagged array [type_name, value] rather
+// than native msgpack type bytes, making the output non-standard and
+// glz::read_msgpack failing to compile for the complex nested types inside
+// the variant.  We implement a compact native msgpack encoder/decoder
+// directly, bypassing glz::generic for the msgpack path entirely.
 // ============================================================================
+
+// ---- native encode helpers ----
+
+static void mp_write_uint(std::string &o, uint64_t v)
+{
+    if (v <= 0x7f)      { o += static_cast<char>(v); }
+    else if (v <= 0xff) { o += '\xcc'; o += static_cast<char>(v); }
+    else if (v <= 0xffff) {
+        o += '\xcd';
+        o += static_cast<char>(v >> 8); o += static_cast<char>(v);
+    } else if (v <= 0xffffffff) {
+        o += '\xce';
+        for (int s = 24; s >= 0; s -= 8) o += static_cast<char>(v >> s);
+    } else {
+        o += '\xcf';
+        for (int s = 56; s >= 0; s -= 8) o += static_cast<char>(v >> s);
+    }
+}
+
+static void mp_write_int(std::string &o, int64_t v)
+{
+    if (v >= 0)         { mp_write_uint(o, static_cast<uint64_t>(v)); return; }
+    if (v >= -32)       { o += static_cast<char>(v & 0xff); return; }
+    if (v >= -128)      { o += '\xd0'; o += static_cast<char>(v); return; }
+    if (v >= -32768) {
+        o += '\xd1';
+        o += static_cast<char>(v >> 8); o += static_cast<char>(v);
+        return;
+    }
+    if (v >= -2147483648LL) {
+        o += '\xd2';
+        for (int s = 24; s >= 0; s -= 8) o += static_cast<char>(v >> s);
+        return;
+    }
+    o += '\xd3';
+    for (int s = 56; s >= 0; s -= 8) o += static_cast<char>(v >> s);
+}
+
+static void mp_write_str(std::string &o, const char *s, size_t n)
+{
+    if (n <= 31) {
+        o += static_cast<char>(0xa0 | n);
+    } else if (n <= 0xff) {
+        o += '\xd9'; o += static_cast<char>(n);
+    } else if (n <= 0xffff) {
+        o += '\xda'; o += static_cast<char>(n >> 8); o += static_cast<char>(n);
+    } else {
+        o += '\xdb';
+        for (int s = 24; s >= 0; s -= 8) o += static_cast<char>(n >> s);
+    }
+    o.append(s, n);
+}
+
+static void mp_write_array_hdr(std::string &o, uint32_t n)
+{
+    if (n <= 15)        { o += static_cast<char>(0x90 | n); }
+    else if (n <= 0xffff) {
+        o += '\xdc'; o += static_cast<char>(n >> 8); o += static_cast<char>(n);
+    } else {
+        o += '\xdd';
+        for (int s = 24; s >= 0; s -= 8) o += static_cast<char>(n >> s);
+    }
+}
+
+static void mp_write_map_hdr(std::string &o, uint32_t n)
+{
+    if (n <= 15)        { o += static_cast<char>(0x80 | n); }
+    else if (n <= 0xffff) {
+        o += '\xde'; o += static_cast<char>(n >> 8); o += static_cast<char>(n);
+    } else {
+        o += '\xdf';
+        for (int s = 24; s >= 0; s -= 8) o += static_cast<char>(n >> s);
+    }
+}
+
+static void msgpack_encode_val(zval *val, std::string &out, int depth)
+{
+    if (depth > 512) { out += '\xc0'; return; }
+    ZVAL_DEREF(val);
+    switch (Z_TYPE_P(val)) {
+        case IS_NULL:  out += '\xc0'; return;
+        case IS_TRUE:  out += '\xc3'; return;
+        case IS_FALSE: out += '\xc2'; return;
+        case IS_LONG:  mp_write_int(out, Z_LVAL_P(val)); return;
+        case IS_DOUBLE: {
+            double d = Z_DVAL_P(val);
+            out += '\xcb';
+            uint64_t bits; std::memcpy(&bits, &d, 8);
+            for (int s = 56; s >= 0; s -= 8) out += static_cast<char>(bits >> s);
+            return;
+        }
+        case IS_STRING:
+            mp_write_str(out, Z_STRVAL_P(val), Z_STRLEN_P(val));
+            return;
+        case IS_ARRAY: {
+            zend_array *ht = Z_ARRVAL_P(val);
+            uint32_t n = zend_hash_num_elements(ht);
+            if (glaze_is_list(ht)) {
+                mp_write_array_hdr(out, n);
+                zval *entry;
+                ZEND_HASH_FOREACH_VAL(ht, entry) {
+                    msgpack_encode_val(entry, out, depth + 1);
+                } ZEND_HASH_FOREACH_END();
+            } else {
+                mp_write_map_hdr(out, n);
+                zend_string *str_key; zend_ulong num_key; zval *entry;
+                ZEND_HASH_FOREACH_KEY_VAL(ht, num_key, str_key, entry) {
+                    if (str_key) mp_write_str(out, ZSTR_VAL(str_key), ZSTR_LEN(str_key));
+                    else { auto ks = std::to_string(num_key); mp_write_str(out, ks.c_str(), ks.size()); }
+                    msgpack_encode_val(entry, out, depth + 1);
+                } ZEND_HASH_FOREACH_END();
+            }
+            return;
+        }
+        case IS_OBJECT: {
+            auto pg = get_object_props(val);
+            uint32_t n = 0;
+            if (pg.ht) {
+                zval *entry;
+                ZEND_HASH_FOREACH_VAL(pg.ht, entry) {
+                    if (Z_TYPE_P(entry) != IS_UNDEF) ++n;
+                } ZEND_HASH_FOREACH_END();
+            }
+            mp_write_map_hdr(out, n);
+            if (pg.ht) {
+                zend_string *str_key; zend_ulong num_key; zval *entry;
+                ZEND_HASH_FOREACH_KEY_VAL(pg.ht, num_key, str_key, entry) {
+                    if (Z_TYPE_P(entry) == IS_UNDEF) continue;
+                    if (str_key) mp_write_str(out, ZSTR_VAL(str_key), ZSTR_LEN(str_key));
+                    else { auto ks = std::to_string(num_key); mp_write_str(out, ks.c_str(), ks.size()); }
+                    msgpack_encode_val(entry, out, depth + 1);
+                } ZEND_HASH_FOREACH_END();
+            }
+            return;
+        }
+        default: out += '\xc0';
+    }
+}
+
+// ---- native decode helpers ----
+
+static bool msgpack_decode_val(const uint8_t *&p, const uint8_t *end,
+                               zval *result, bool assoc, int depth)
+{
+    if (p >= end || depth > 512) { ZVAL_NULL(result); return p < end || depth <= 512; }
+    uint8_t b = *p++;
+
+    // nil / bool
+    if (b == 0xc0) { ZVAL_NULL(result); return true; }
+    if (b == 0xc2) { ZVAL_FALSE(result); return true; }
+    if (b == 0xc3) { ZVAL_TRUE(result);  return true; }
+
+    // positive fixint
+    if (b <= 0x7f) { ZVAL_LONG(result, b); return true; }
+    // negative fixint
+    if (b >= 0xe0) { ZVAL_LONG(result, static_cast<int8_t>(b)); return true; }
+
+    auto need = [&](size_t n) { return static_cast<size_t>(end - p) >= n; };
+    auto read_be = [&](int n) -> uint64_t {
+        uint64_t v = 0;
+        for (int i = 0; i < n; ++i) v = (v << 8) | *p++;
+        return v;
+    };
+
+    // uint
+    if (b == 0xcc) { if (!need(1)) return false; ZVAL_LONG(result, read_be(1)); return true; }
+    if (b == 0xcd) { if (!need(2)) return false; ZVAL_LONG(result, read_be(2)); return true; }
+    if (b == 0xce) { if (!need(4)) return false; ZVAL_LONG(result, (zend_long)read_be(4)); return true; }
+    if (b == 0xcf) {
+        if (!need(8)) return false;
+        uint64_t v = read_be(8);
+        if (v <= (uint64_t)ZEND_LONG_MAX) ZVAL_LONG(result, (zend_long)v);
+        else ZVAL_DOUBLE(result, (double)v);
+        return true;
+    }
+    // int
+    if (b == 0xd0) { if (!need(1)) return false; ZVAL_LONG(result, (int8_t)read_be(1)); return true; }
+    if (b == 0xd1) { if (!need(2)) return false; ZVAL_LONG(result, (int16_t)read_be(2)); return true; }
+    if (b == 0xd2) { if (!need(4)) return false; ZVAL_LONG(result, (int32_t)read_be(4)); return true; }
+    if (b == 0xd3) { if (!need(8)) return false; ZVAL_LONG(result, (int64_t)read_be(8)); return true; }
+    // float
+    if (b == 0xca) {
+        if (!need(4)) return false;
+        uint32_t bits = (uint32_t)read_be(4); float f; std::memcpy(&f, &bits, 4);
+        ZVAL_DOUBLE(result, f); return true;
+    }
+    if (b == 0xcb) {
+        if (!need(8)) return false;
+        uint64_t bits = read_be(8); double d; std::memcpy(&d, &bits, 8);
+        ZVAL_DOUBLE(result, d); return true;
+    }
+    // str
+    auto do_str = [&](size_t n) -> bool {
+        if (!need(n)) return false;
+        ZVAL_STRINGL(result, reinterpret_cast<const char *>(p), n); p += n; return true;
+    };
+    if ((b & 0xe0) == 0xa0) return do_str(b & 0x1f);
+    if (b == 0xd9) { if (!need(1)) return false; return do_str((size_t)read_be(1)); }
+    if (b == 0xda) { if (!need(2)) return false; return do_str((size_t)read_be(2)); }
+    if (b == 0xdb) { if (!need(4)) return false; return do_str((size_t)read_be(4)); }
+    // bin — treat as string
+    if (b == 0xc4) { if (!need(1)) return false; return do_str((size_t)read_be(1)); }
+    if (b == 0xc5) { if (!need(2)) return false; return do_str((size_t)read_be(2)); }
+    if (b == 0xc6) { if (!need(4)) return false; return do_str((size_t)read_be(4)); }
+    // array
+    auto do_array = [&](uint32_t n) -> bool {
+        array_init_size(result, n);
+        for (uint32_t i = 0; i < n; ++i) {
+            zval elem; ZVAL_UNDEF(&elem);
+            if (!msgpack_decode_val(p, end, &elem, assoc, depth + 1)) return false;
+            add_next_index_zval(result, &elem);
+        }
+        return true;
+    };
+    if ((b & 0xf0) == 0x90) return do_array(b & 0x0f);
+    if (b == 0xdc) { if (!need(2)) return false; return do_array((uint32_t)read_be(2)); }
+    if (b == 0xdd) { if (!need(4)) return false; return do_array((uint32_t)read_be(4)); }
+    // map
+    auto do_map = [&](uint32_t n) -> bool {
+        if (assoc) array_init_size(result, n); else object_init(result);
+        for (uint32_t i = 0; i < n; ++i) {
+            zval kv; ZVAL_UNDEF(&kv);
+            if (!msgpack_decode_val(p, end, &kv, assoc, depth + 1)) return false;
+            // key must be a string or integer
+            zval vv; ZVAL_UNDEF(&vv);
+            if (!msgpack_decode_val(p, end, &vv, assoc, depth + 1)) {
+                zval_ptr_dtor(&kv); return false;
+            }
+            if (Z_TYPE(kv) == IS_STRING) {
+                if (assoc) add_assoc_zval_ex(result, Z_STRVAL(kv), Z_STRLEN(kv), &vv);
+                else       { add_property_zval_ex(result, Z_STRVAL(kv), Z_STRLEN(kv), &vv); zval_ptr_dtor(&vv); }
+            } else {
+                // numeric key: coerce to string for assoc, skip for object
+                zval str_key; ZVAL_UNDEF(&str_key);
+                convert_to_string_ex(&kv);
+                if (assoc) add_assoc_zval_ex(result, Z_STRVAL(kv), Z_STRLEN(kv), &vv);
+                else       { add_property_zval_ex(result, Z_STRVAL(kv), Z_STRLEN(kv), &vv); zval_ptr_dtor(&vv); }
+                (void)str_key;
+            }
+            zval_ptr_dtor(&kv);
+        }
+        return true;
+    };
+    if ((b & 0xf0) == 0x80) return do_map(b & 0x0f);
+    if (b == 0xde) { if (!need(2)) return false; return do_map((uint32_t)read_be(2)); }
+    if (b == 0xdf) { if (!need(4)) return false; return do_map((uint32_t)read_be(4)); }
+
+    // ext / unknown — skip and return null
+    ZVAL_NULL(result);
+    return true;
+}
 
 PHP_FUNCTION(glaze_msgpack_encode)
 {
@@ -587,12 +844,8 @@ PHP_FUNCTION(glaze_msgpack_encode)
         Z_PARAM_ZVAL(value)
     ZEND_PARSE_PARAMETERS_END();
 
-    glz::generic g{};
-    php_to_generic(value, g);
-
     std::string buf;
-    auto ec = glz::write_msgpack(g, buf);
-    if (ec) { RETURN_FALSE; }
+    msgpack_encode_val(value, buf, 0);
     RETURN_STRINGL(buf.c_str(), buf.size());
 }
 
@@ -607,14 +860,12 @@ PHP_FUNCTION(glaze_msgpack_decode)
         Z_PARAM_BOOL(assoc)
     ZEND_PARSE_PARAMETERS_END();
 
-    std::string buf(ZSTR_VAL(data), ZSTR_LEN(data));
-    glz::generic g{};
-    auto ec = glz::read_msgpack(g, buf);
-    if (ec) {
-        php_error_docref(nullptr, E_WARNING, "glaze_msgpack_decode: parse error");
-        RETURN_NULL();
+    const uint8_t *p   = reinterpret_cast<const uint8_t *>(ZSTR_VAL(data));
+    const uint8_t *end = p + ZSTR_LEN(data);
+    if (!msgpack_decode_val(p, end, return_value, static_cast<bool>(assoc), 0)) {
+        php_error_docref(nullptr, E_WARNING, "glaze_msgpack_decode: malformed msgpack");
+        ZVAL_NULL(return_value);
     }
-    generic_to_zval(g, return_value, static_cast<bool>(assoc));
 }
 
 // ============================================================================
