@@ -17,7 +17,7 @@ jobs:
         php: [ "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5" ]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # -----------------------------------------------------------------------
       # Platform-specific toolchain
@@ -51,7 +51,7 @@ jobs:
       # Build
       # -----------------------------------------------------------------------
       - name: Cache Glaze source
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: build/_deps/glaze-src
           key: glaze-v7.7.0-${{ runner.os }}
