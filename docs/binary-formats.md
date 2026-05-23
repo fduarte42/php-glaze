@@ -75,21 +75,21 @@ echo $decoded['count'];     // 42
 
 MessagePack is a widely adopted binary serialization format used in Redis, Fluentd, and many RPC systems.
 
-### Encoding
+### Encoding and Decoding
 
 ```php
 $data = ['x' => 1, 'y' => 2, 'label' => 'point'];
 
 $mp = glaze_msgpack_encode($data);
-// Raw MessagePack bytes — send to any MessagePack consumer
-```
+// Raw MessagePack bytes
 
-{: .warning }
-> **Decode not supported.** Due to a limitation in Glaze v7.7.0 with dynamic types, `glaze_msgpack_decode` is not available. If you need a round-trip entirely within php-glaze, use **CBOR** or **BEVE** instead.
+$decoded = glaze_msgpack_decode($mp);
+echo $decoded['label'];  // point
+```
 
 ### Interoperability
 
-MessagePack output from `glaze_msgpack_encode` is compatible with any standard MessagePack decoder. For example, consuming the output with a Python client:
+MessagePack output from `glaze_msgpack_encode` can be consumed by any standard MessagePack library. For example, with a Python client:
 
 ```python
 import msgpack
@@ -98,9 +98,8 @@ data = msgpack.unpackb(php_output, raw=False)
 
 ### When to Use MessagePack
 
-- Producing data for consumers that require MessagePack (Redis Streams, Fluentd, etc.)
+- Interoperability with systems that require MessagePack (Redis Streams, Fluentd, RPC frameworks, etc.)
 - Cross-language binary payloads with wide ecosystem support
-- You don't need to decode MessagePack back in PHP with this extension
 
 ---
 
@@ -110,6 +109,6 @@ data = msgpack.unpackb(php_output, raw=False)
 |---------|------|------|-------------|
 | Standard | Glaze-specific | RFC 7049 | MessagePack spec |
 | Encode | ✓ | ✓ | ✓ |
-| Decode | ✓ | ✓ | — |
+| Decode | ✓ | ✓ | ✓ |
 | Cross-language | Limited | Broad | Broad |
-| Best for | Internal Glaze round-trips | Interoperability | Producing for external consumers |
+| Best for | Internal Glaze round-trips | Interoperability | Wide ecosystem compatibility |

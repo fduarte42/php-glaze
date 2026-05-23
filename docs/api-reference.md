@@ -229,8 +229,32 @@ Encodes a PHP value to MessagePack binary.
 
 **Returns:** Raw MessagePack binary string, or `false` on failure.
 
-{: .warning }
-> MessagePack **decode** is not supported in Glaze v7.7.0 with dynamic types. Use `glaze_cbor_decode` or `glaze_beve_decode` as alternatives if a round-trip is needed within php-glaze.
+---
+
+### `glaze_msgpack_decode`
+
+```php
+glaze_msgpack_decode(string $data, bool $assoc = true): mixed
+```
+
+Decodes a MessagePack binary string to a PHP value.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `$data` | string | Raw MessagePack binary data |
+| `$assoc` | bool | When `true` (default), objects are returned as associative arrays |
+
+**Returns:** Decoded PHP value, or `null` on failure.
+
+**Example:**
+
+```php
+$mp = glaze_msgpack_encode(['name' => 'Alice', 'score' => 99]);
+$decoded = glaze_msgpack_decode($mp);
+echo $decoded['name'];  // Alice
+```
 
 ---
 

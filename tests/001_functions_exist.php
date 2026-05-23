@@ -10,6 +10,7 @@ $functions = [
     'glaze_cbor_encode',
     'glaze_cbor_decode',
     'glaze_msgpack_encode',
+    'glaze_msgpack_decode',
     'glaze_toml_encode',
     'glaze_toml_decode',
     'glaze_yaml_encode',
